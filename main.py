@@ -1,6 +1,9 @@
 from collections import deque
 from datetime import datetime
+from PIL import Image, ImageTk
 import numpy as np
+import tkinter as tk
+import threading
 import serial
 import time
 import math
@@ -88,17 +91,51 @@ class Tracker:
 
         self.previous_objects = self.objects
 
-
     def clear(self):
         self.objects = {}
         self.previous_objects = {}
 
+class Gui(tk.Frame):
+    def __init__(self):
+        self.root = tk.Tk()
+        self.panel = None
+        self.open = True
+
+        self.root.wm_title("Tracking Control Panel")
+        self.root.wm_protocol("WM_DELETE_WINDOW", self.on_close)
+
+    def update_video(self, frame):
+        # OpenCV represents images in BGR order; however PIL
+        # represents images in RGB order, so we need to swap
+        # the channels, then convert to PIL and ImageTk format
+        image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        image = Image.fromarray(image)
+        image = ImageTk.PhotoImage(image)
+
+        # if the panel is not None, we need to initialize it
+        if self.panel is None:
+            print("Initialise GUI")
+            self.panel = tk.Label(image=image)
+            self.panel.image = image
+            self.panel.pack(side="left", padx=10, pady=10)
+
+        # otherwise, simply update the panel
+        else:
+            self.panel.configure(image=image)
+            self.panel.image = image
+    
+    def on_close(self):
+        print("Exiting...")
+        self.open = not self.open
+        self.root.destroy()
+        self.root.quit()
+
 def send_motor(motor, steps):
-    #commands are enclosed with <>
-    #a/b for azimuth/elevation motor respectively
-    #+/- for clockwise/anticlockwise respectively
-    #positive integer for number of steps
-    #e.g. <a+1000>; azimuth, clockwise, 1000 steps
+    # commands are enclosed with <>
+    # a/b for azimuth/elevation motor respectively
+    # +/- for clockwise/anticlockwise respectively
+    # positive integer for number of steps
+    # e.g. <a+1000>; azimuth, clockwise, 1000 steps
 
     cmd = "<"
 
@@ -162,18 +199,23 @@ def main():
     #if not ser.isOpen():
     #    ser.open()
 
-    #main setup
+    # main setup
     print("Starting main...")
 
-    #camera dimensions
+    # GUI setup
+    gui = Gui()
+
+    # define camera dimensions
     guide_dimensions = (1920, 1080)
     main_dimensions = (3856, 2764)
-    #main_dimensions = (1920, 1080)
 
-    #video
+    # define video output settings
     codec = cv2.VideoWriter_fourcc(*'WMV3')
+    fps = 20
+    guide_out = cv2.VideoWriter('guide_out.wmv', codec, fps, guide_dimensions)
+    #main_out = cv2.VideoWriter('main_out.wmv', codec, fps, guide_dimensions)
 
-    #define camera inputs
+    # define camera inputs
     #guide_in = cv2.VideoCapture(0, cv2.CAP_ANY)
     guide_in = cv2.VideoCapture("guidescope_test.mp4")
     guide_in.set(cv2.CAP_PROP_FRAME_WIDTH, guide_dimensions[0])
@@ -181,9 +223,6 @@ def main():
     guide_in.set(cv2.CAP_PROP_FOURCC, codec)
     guide_dimensions = (int(guide_in.get(cv2.CAP_PROP_FRAME_WIDTH)),
                         int(guide_in.get(cv2.CAP_PROP_FRAME_HEIGHT)))
-
-    print(guide_dimensions)
-
     print("Guidescope open")
 
     #main_in = cv2.VideoCapture(1, cv2.CAP_ANY)
@@ -194,49 +233,43 @@ def main():
     #main_in.set(cv2.CAP_PROP_FOURCC, codec)
     #print("Main Camera open")
 
-    #params for video outputs
-    print(f"guidescope api: {guide_in.getBackendName()}")
-    #print(f"main cam api: {main_in.getBackendName()}")
-    fps = 20
-
-    #create video output
-    guide_out = cv2.VideoWriter('guide_out.wmv', codec, fps, guide_dimensions)
-    #main_out = cv2.VideoWriter('main_out.wmv', codec, fps, guide_dimensions)
-
     #CALIBRATE
 
     #GO TO ISS
 
-    #initialise euclidean distance tracker object
+    # initialise euclidean distance tracker object
     tracker = Tracker()
-    #initialise tracking as false
+    # initialise object tracking as false
     tracking = False
-    #initialise recording
+    # initialise camera recording as false
     recording = False
-    #initialise tracking overlay
+    # initialise object tracking overlay as true
     overlay = True
 
-    #main loop
-    while True:
-        #start timer for fps
+    # main tracking loop
+    # run until user closes GUI
+    while gui.open:
+        # start timer for fps
         loop_time = time.perf_counter()
 
-        #get new frame
+        # get new frame
         ret, guide_frame = guide_in.read()
         guide_frame = cv2.rotate(guide_frame, cv2.ROTATE_180)
 
+        # break if there is no new frame;
+        # i.e. if the test video ends
         if not ret:
             break
 
         #_ , main_frame = main_in.read()
 
-        #get a list of bounding rectabgles for each object in frame
+        # get a list of bounding rectangles for each object in frame
         object_bounding_rectangles = get_bounding_rectangles(guide_frame)
 
-        #get a list of objects with ids
+        # get a list of objects with ids
         tracker.update(object_bounding_rectangles)
 
-        #move the motors if we are tracking
+        # move the motors if we are tracking an object
         if tracking:
             x, y = tracker.object_pos
             x_mov = guide_dimensions[0]/2 - x
@@ -244,39 +277,39 @@ def main():
             #print(f"{x_mov}, {y_mov}")
 
 
-        #user keyboard interactions
+        # user keyboard interactions
         key = cv2.waitKey(1)
 
-        #exit with e
+        # exit with e
         if key == ord('e'):
             print("Exiting...")
             break
 
-        #save screenshot with [space]
+        # save screenshot with [space]
         if key == ord(' '):
             file_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")
             #cv2.imwrite(f".\Screenshots\main_{file_time}.png", main_frame)
             cv2.imwrite(f".\Screenshots\guide_{file_time}.png", guide_frame)
             print(f"Saving screenchot as \"{file_time}\"")
         
-        #toggle tracking with t
+        # toggle tracking with t
         if key == ord('t'):
             tracking = not tracking
 
-        #toggle recording with r
+        # toggle recording with r
         if key == ord('r'):
             recording = not recording
 
-        #toggle overlay with o
+        # toggle overlay with o
         if key == ord('o'):
             overlay = not overlay
 
-        #clear ids with c
+        # clear ids with c
         if key == ord('c'):
             tracker.clear()
 
-        #increment tracking id with w, decrement with s
-        #increment by 10 with q, decrement by 10 with a
+        # increment tracking id with w, decrement with s
+        # increment by 10 with q, decrement by 10 with a
         if key == ord('w'):
             tracker.object_id += 1
         elif key == ord('s'):
@@ -295,9 +328,9 @@ def main():
             for id, obj in tracker.objects.items():
                 x, y, width, height, dx, dy, mem = obj
 
-                #if this is the object we are tracking
-                #then change the colour from blue to red
-                #else leave it as blue
+                # if this is the object we are tracking
+                # then change the colour from blue to red
+                # else leave it as blue
                 if id == tracker.object_id and tracking:
                     tracker.object_pos = (x, y)
                     text_colour = (0, 0, 255)
@@ -310,18 +343,18 @@ def main():
                     cv2.putText(guide_frame, str(id), (x, y - 5), cv2.FONT_HERSHEY_PLAIN, 1, text_colour, 2)
                     cv2.rectangle(guide_frame, (x, y), (x + width, y + height), box_colour, 1)
 
-            #centre circle in the guidescope
+            # centre circle in the guidescope
             (x, y) = guide_dimensions
             cv2.circle(guide_frame, (x//2, y//2), 5, (0, 0, 255), -1)
 
-            #outline main camera FOV in the guidescope
-            #main FOV 0.3056deg x 0.2196deg
-            #guide FOV 1.91deg x 1.07deg
-            #thus the main FOV is bounded by the centre 20.5% x 16% of the guide frame
+            # outline main camera FOV in the guidescope
+            # main FOV 0.3056deg x 0.2196deg
+            # guide FOV 1.91deg x 1.07deg
+            # thus the main FOV is bounded by the centre 20.5% x 16% of the guide frame
             (h, w) = (int(0.205*y), int(0.16*x))
             cv2.rectangle(guide_frame, ((x-w)//2, (y-h)//2), ((x+w)//2, (y+h)//2), (0, 0, 255), 1)
 
-            #write tracking id on frame
+            # write tracking id on frame
             if tracking:
                 guide_frame = cv2.putText(guide_frame, f"Tracking", 
                                             (5, guide_dimensions[1]-25), 
@@ -330,26 +363,26 @@ def main():
                                         (5, guide_dimensions[1]-10), 
                                         cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 2)
 
-            #update fps
+            # update fps counter
             loop_time = time.perf_counter() - loop_time
             cv2.putText(guide_frame, f"{1/loop_time:02.2f} FPS", (5, 15), cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 2)
 
             if recording:
-                #write recording
+                # write 'recording' in bottom left of frame to notify user the video feed is being recorded
                 cv2.putText(guide_frame, f"Recording", (5, 30), cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 2)
 
         if recording:
-            #save frame to video file
+            # save frame to video file
             guide_out.write(guide_frame)
             #main_out.write(cv2.resize(main_frame, guide_dimensions))
 
-        #show frame to user
-        cv2.imshow("Guide Scope", cv2.resize(guide_frame, (1024, 576)))
-        #cv2.imshow("Main Camera", main_frame)
+        # downsize the resolution before showing to the user
+        gui_frame = cv2.resize(guide_frame, (1024, 576))
+        gui.update_video(gui_frame)
+        gui.root.update()
 
-    cv2.destroyAllWindows()
     guide_out.release()
     #main_out.release()
     #ser.close()
-    
-    #return tracker.objects
+
+    print("Done.")
