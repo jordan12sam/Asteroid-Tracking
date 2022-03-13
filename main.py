@@ -130,7 +130,8 @@ class Gui():
         self.root = tk.Tk()
         self.open = True
 
-        self.pady = 5
+        self.pady = 1
+        self.padx = 1
 
         self.full_image = None
 
@@ -139,48 +140,48 @@ class Gui():
 
         # video options
         self.video_label = tk.Label(self.root, text="Video Options")
-        self.video_label.grid(row=0, column=self.video_width+1, padx=10, pady=self.pady)
+        self.video_label.grid(row=0, column=self.video_width+1, padx=self.padx, pady=self.pady)
 
         self.overlay = True
         self.overlay_button = tk.Button(self.root, text="Toggle Overlay", command=self.overlay_command)
-        self.overlay_button.grid(row=1, column=self.video_width+1, padx=10, pady=self.pady)
+        self.overlay_button.grid(row=1, column=self.video_width+1, padx=self.padx, pady=self.pady)
 
         self.recording = False
         self.record_button = tk.Button(self.root, text="Toggle Video", command=self.record_command)
-        self.record_button.grid(row=1, column=self.video_width+2, padx=10, pady=self.pady)
+        self.record_button.grid(row=1, column=self.video_width+2, padx=self.padx, pady=self.pady)
 
         self.screenshot = False
         self.screenshot_button = tk.Button(self.root, text="Screenshot", command=self.screenshot_command)
-        self.screenshot_button.grid(row=1, column=self.video_width+3, padx=10, pady=self.pady)
+        self.screenshot_button.grid(row=2, column=self.video_width+1, padx=self.padx, pady=self.pady)
 
         # tracking options
         self.tracking_label = tk.Label(self.root, text="Tracking Options")
-        self.tracking_label.grid(row=3, column=self.video_width+1, padx=10, pady=self.pady)
+        self.tracking_label.grid(row=4, column=self.video_width+1, padx=self.padx, pady=self.pady)
 
         self.clear_button = tk.Button(self.root, text="Reset Object IDs", command=self.tracker.clear)
-        self.clear_button.grid(row=4, column=self.video_width+1, padx=10, pady=self.pady)
+        self.clear_button.grid(row=6, column=self.video_width+1, padx=self.padx, pady=self.pady)
 
         self.tracking = False
         self.tracking_button = tk.Button(self.root, text="Toggle Tracking Mode", command=self.tracker.track)
-        self.tracking_button.grid(row=4, column=self.video_width+2, padx=10, pady=self.pady)
+        self.tracking_button.grid(row=5, column=self.video_width+1, padx=self.padx, pady=self.pady)
 
-        self.tracking_id_input = tk.Entry(self.root, justify="right")
+        self.tracking_id_input = tk.Entry(self.root, justify="right", width=18)
         self.tracking_id_input.insert(tk.END, "Enter Tracking ID")
-        self.tracking_id_input.grid(row=4, column=self.video_width+3, padx=10, pady=self.pady)
+        self.tracking_id_input.grid(row=5, column=self.video_width+2, padx=self.padx, pady=self.pady)
 
         # manual control
         self.tracking_label = tk.Label(self.root, text="Manual Control")
-        self.tracking_label.grid(row=6, column=self.video_width+1, padx=10, pady=self.pady)
+        self.tracking_label.grid(row=8, column=self.video_width+1, padx=self.padx, pady=self.pady)
 
         self.up = tk.Button(self.root, text="Move Azimuth", command=lambda: self.motor_command("az"))
-        self.up.grid(row=7, column=self.video_width+1, padx=10, pady=self.pady)
+        self.up.grid(row=9, column=self.video_width+1, padx=self.padx, pady=self.pady)
 
         self.left = tk.Button(self.root, text="Move Elevation", command=lambda: self.motor_command("elv"))
-        self.left.grid(row=7, column=self.video_width+2, padx=10, pady=self.pady)
+        self.left.grid(row=9, column=self.video_width+2, padx=self.padx, pady=self.pady)
 
-        self.steps_entry = tk.Entry(self.root, justify="right")
+        self.steps_entry = tk.Entry(self.root, justify="right", width=18)
         self.steps_entry.insert(tk.END, "Enter Steps")
-        self.steps_entry.grid(row=7, column=self.video_width+3, padx=10, pady=self.pady)
+        self.steps_entry.grid(row=10, column=self.video_width+1, padx=self.padx, pady=self.pady)
 
         self.root.wm_title("Tracking Control Panel")
         self.root.wm_protocol("WM_DELETE_WINDOW", self.on_close)
@@ -255,7 +256,7 @@ class Gui():
             print("Initialise GUI")
             self.video_frame = tk.Label(image=image)
             self.video_frame.image = image
-            self.video_frame.grid(row=0, column=0, rowspan=32, columnspan=self.video_width, padx=10, pady=10)
+            self.video_frame.grid(row=0, column=0, rowspan=32, columnspan=self.video_width, padx=self.padx, pady=self.pady)
 
         # otherwise, simply update the panel
         else:
