@@ -12,6 +12,13 @@ os.environ["OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS"] = "0"
 import cv2
 from scipy.optimize import linear_sum_assignment
 
+#select the communication port and open
+ser = serial.Serial("COM4", 9600)
+ser.timeout = 1
+if not ser.isOpen():
+    ser.open()
+    time.sleep(2)
+
 # tracker object
 # tracks objects across frames
 class Tracker:
@@ -114,8 +121,8 @@ class Gui():
     
     def screenshot_command(self):
         file_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")
-        #cv2.imwrite(f".\Screenshots\main_{file_time}.png", main_frame)
-        cv2.imwrite(f".\screenshots\guide_{file_time}.png", self.full_image)
+        cv2.imwrite(f".\Screenshots\main_{file_time}.png", self.main_frame)
+        cv2.imwrite(f".\screenshots\guide_{file_time}.png", self.guide_frame)
         print(f"Saving screenchot as \"{file_time}\"")
     
     def motor_command(self, motor):
@@ -124,6 +131,9 @@ class Gui():
         except ValueError as e:
             print(e)
     
+    def source_command(self):
+        self.source_id = not self.source_id
+
     def __init__(self, tracker):
         self.tracker = tracker
 
@@ -133,7 +143,9 @@ class Gui():
         self.pady = 1
         self.padx = 1
 
-        self.full_image = None
+        self.guide_frame = None
+        self.main_frame = None
+        self.show_frame = None
 
         self.video_frame = None
         self.video_width = 4
@@ -147,12 +159,16 @@ class Gui():
         self.overlay_button.grid(row=1, column=self.video_width+1, padx=self.padx, pady=self.pady)
 
         self.recording = False
-        self.record_button = tk.Button(self.root, text="Toggle Video", command=self.record_command)
+        self.record_button = tk.Button(self.root, text="Toggle Recording", command=self.record_command)
         self.record_button.grid(row=1, column=self.video_width+2, padx=self.padx, pady=self.pady)
 
         self.screenshot = False
         self.screenshot_button = tk.Button(self.root, text="Screenshot", command=self.screenshot_command)
         self.screenshot_button.grid(row=2, column=self.video_width+1, padx=self.padx, pady=self.pady)
+
+        self.source_id = False
+        self.source_button = tk.Button(self.root, text="Toggle Source", command=self.source_command)
+        self.source_button.grid(row=2, column=self.video_width+2, padx=self.padx, pady=self.pady)
 
         # tracking options
         self.tracking_label = tk.Label(self.root, text="Tracking Options")
@@ -188,24 +204,24 @@ class Gui():
 
     def draw_overlay(self, loop_time):
         # get frame dimensions
-        (y, x) = self.full_image.shape[:2]
+        (y, x) = self.show_frame.shape[:2]
 
         # centre circle in the guidescope
-        cv2.circle(self.full_image, (x//2, y//2), 5, (0, 0, 255), -1)
+        cv2.circle(self.show_frame, (x//2, y//2), 5, (0, 0, 255), -1)
 
         # outline main camera FOV in the guidescope
         # main FOV 0.3056deg x 0.2196deg
         # guide FOV 1.91deg x 1.07deg
         # thus the main FOV is bounded by the centre 20.5% x 16% of the guide frame
         (h, w) = (int(0.205*y), int(0.16*x))
-        cv2.rectangle(self.full_image, ((x-w)//2, (y-h)//2), ((x+w)//2, (y+h)//2), (0, 0, 255), 1)
+        cv2.rectangle(self.show_frame, ((x-w)//2, (y-h)//2), ((x+w)//2, (y+h)//2), (0, 0, 255), 1)
 
         # write tracking id on frame
         if self.tracker.tracking:
-            self.full_image = cv2.putText(self.full_image, f"Tracking", 
+            self.show_frame = cv2.putText(self.show_frame, f"Tracking", 
                                         (5, y-25), 
                                         cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 2)
-        self.full_image = cv2.putText(self.full_image, f"Tracking id: {self.tracker.target_id}", 
+        self.show_frame = cv2.putText(self.show_frame, f"Tracking id: {self.tracker.target_id}", 
                                     (5, y-10), 
                                     cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 2)
 
@@ -224,29 +240,35 @@ class Gui():
                 box_colour = (0, 255, 0)
 
             if not width*height == 0:
-                cv2.putText(self.full_image, str(id), (x, y - 5), cv2.FONT_HERSHEY_PLAIN, 1, text_colour, 2)
-                cv2.rectangle(self.full_image, (x, y), (x + width, y + height), box_colour, 1)
+                cv2.putText(self.show_frame, str(id), (x, y - 5), cv2.FONT_HERSHEY_PLAIN, 1, text_colour, 2)
+                cv2.rectangle(self.show_frame, (x, y), (x + width, y + height), box_colour, 1)
 
         # update fps counter
         loop_time = time.perf_counter() - loop_time
-        cv2.putText(self.full_image, f"{1/loop_time:02.2f} FPS", (5, 15), cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 2)
+        cv2.putText(self.show_frame, f"{1/loop_time:02.2f} FPS", (5, 15), cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 2)
 
         if self.recording:
             # write 'recording' in bottom left of frame to notify user the video feed is being recorded
-            cv2.putText(self.full_image, f"Recording", (5, 30), cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 2)
+            cv2.putText(self.show_frame, f"Recording", (5, 30), cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 2)
 
-    def update_video(self, frame, loop_time):
+    def update_video(self, guide_frame, main_frame, loop_time):
         # save raw input image
         # if enabled, add the overlay
-        self.full_image = frame
-        if self.overlay:
-            self.draw_overlay(loop_time)
+        self.main_frame = main_frame
+        self.guide_frame = guide_frame
+
+        if self.source_id:
+            self.show_frame = self.main_frame
+        elif not self.source_id:
+            self.show_frame = self.guide_frame
+            if self.overlay:
+                self.draw_overlay(loop_time)
 
         # downsize resolution of video
         # OpenCV represents images in BGR order; however PIL
         # represents images in RGB order, so we need to swap
         # the channels, then convert to PIL and ImageTk format
-        image = cv2.resize(self.full_image, (1024, 576))
+        image = cv2.resize(self.show_frame, (1024, 576))
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         image = Image.fromarray(image)
         image = ImageTk.PhotoImage(image)
@@ -279,17 +301,17 @@ class Gui():
 # movement based on given steps
 def move_motor(motor, steps):
     # commands are enclosed with <>
-    # a/b for azimuth/elevation motor respectively
-    # +/- for clockwise/anticlockwise respectively
+    # a/b for elevation/azimuth motor respectively
+    # +/- for anticlockwise/clockwise, up/down respectively
     # positive integer for number of steps
     # e.g. <a+1000>; azimuth, clockwise, 1000 steps
 
     cmd = "<"
 
     if motor == "az":
-        cmd += "a"
-    elif motor == "elv":
         cmd += "b"
+    elif motor == "elv":
+        cmd += "a"
     else:
         print("motor error")
     
@@ -304,12 +326,11 @@ def move_motor(motor, steps):
     cmd += ">"
     print(f"sending: {cmd}")
 
-    #commands must be encoded using utf-8
-    #command is then sent to the arduino
-    #then close the serial communications
+    # commands must be encoded using utf-8
+    # command is then sent to the arduino
 
     cmd = cmd.encode("utf-8")
-    #ser.write(cmd)
+    ser.write(cmd)
 
 # detects objects in the frame
 # returns a list of object coordinates and sizes
@@ -341,11 +362,6 @@ def get_bounding_rectangles(frame):
     return object_bounding_rectangles
 
 def main():
-    #select the communication port and open
-    #ser = serial.Serial("COM3", 9600)
-    #ser.timeout = 1
-    #if not ser.isOpen():
-    #    ser.open()
 
     # main setup
     print("Starting main...")
@@ -362,7 +378,7 @@ def main():
 
     # define camera inputs
     #guide_in = cv2.VideoCapture(0, cv2.CAP_ANY)
-    guide_in = cv2.VideoCapture("guidescope_test.mp4")
+    guide_in = cv2.VideoCapture("guidescope_test_0.mp4")
     guide_in.set(cv2.CAP_PROP_FRAME_WIDTH, guide_dimensions[0])
     guide_in.set(cv2.CAP_PROP_FRAME_HEIGHT, guide_dimensions[1])
     guide_in.set(cv2.CAP_PROP_FOURCC, codec)
@@ -370,13 +386,12 @@ def main():
                         int(guide_in.get(cv2.CAP_PROP_FRAME_HEIGHT)))
     print("Guidescope open")
 
-    #main_in = cv2.VideoCapture(1, cv2.CAP_ANY)
-    #main_in = cv2.VideoCapture("test_in4.mp4")
-    #main_in.set(cv2.CAP_PROP_FRAME_WIDTH, main_dimensions[0])
-    #main_in.set(cv2.CAP_PROP_FRAME_HEIGHT, main_dimensions[1])
-    #main_in.set(cv2.CAP_PROP_CONVERT_RGB, 0.0)
-    #main_in.set(cv2.CAP_PROP_FOURCC, codec)
-    #print("Main Camera open")
+    main_in = cv2.VideoCapture(0, cv2.CAP_ANY)
+    #main_in = cv2.VideoCapture("guidescope_test_1.mp4")
+    main_in.set(cv2.CAP_PROP_FRAME_WIDTH, main_dimensions[0])
+    main_in.set(cv2.CAP_PROP_FRAME_HEIGHT, main_dimensions[1])
+    main_in.set(cv2.CAP_PROP_FOURCC, codec)
+    print("Main Camera open")
 
     #CALIBRATE
 
@@ -403,7 +418,7 @@ def main():
         if not ret:
             break
 
-        #_ , main_frame = main_in.read()
+        _ , main_frame = main_in.read()
 
         # get a list of bounding rectangles for each object in frame
         object_bounding_rectangles = get_bounding_rectangles(guide_frame)
@@ -422,17 +437,17 @@ def main():
             #print(f"{x_mov}, {y_mov}")
 
         # send video to gui
-        gui.update_video(guide_frame, loop_time)
+        gui.update_video(guide_frame, main_frame, loop_time)
         gui.root.update()
 
         # save frame
         if gui.recording:
             # save frame to video file
-            guide_out.write(gui.full_image)
+            guide_out.write(gui.guide_frame)
             #main_out.write(cv2.resize(main_frame, guide_dimensions))
 
     guide_out.release()
     #main_out.release()
-    #ser.close()
+    ser.close()
 
     print("Done.")
