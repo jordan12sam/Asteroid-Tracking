@@ -1,5 +1,6 @@
 from collections import deque
 from datetime import datetime
+from pickle import TRUE
 from PIL import Image, ImageTk
 import numpy as np
 import tkinter as tk
@@ -127,21 +128,24 @@ class Gui():
     def overlay_command(self):
         self.overlay = not self.overlay
     
-    def record_command(self):
-        self.recording = not self.recording
+    def record_command(self, camera):
+        camera.recording = not camera.recording
+        if camera.recording:
+            camera.start_video()
+        elif not camera.recording:
+            camera.stop_video()
     
-    def screenshot_command(self):
+    def screenshot_command(self, camera):
         file_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")
-        cv2.imwrite(f".\Screenshots\main_{file_time}.png", self.main_frame)
-        cv2.imwrite(f".\screenshots\guide_{file_time}.png", self.guide_frame)
-        print(f"Saving screenchot as \"{file_time}\"")
+        cv2.imwrite(f".\Screenshots\{camera.name}_{file_time}.png", camera.frame)
+        print(f"Saving screenchot as \"{camera.name}_{file_time}.png\"")
     
     def motor_command(self, motor, dir):
         steps = abs(int(self.steps_entry.get()))
         if not dir:
             steps *= -1
         try:
-            move_motor(motor, steps)
+            move_motor(motor, steps, self.ser)
             print(f"Moving {motor} motor {steps} steps")
         except ValueError as e:
             print(e)
@@ -149,8 +153,9 @@ class Gui():
     def source_command(self):
         self.source_id = not self.source_id
 
-    def __init__(self, tracker):
+    def __init__(self, tracker, ser, guidescope, maincam):
         self.tracker = tracker
+        self.ser = ser
 
         self.root = tk.Tk()
         self.open = True
@@ -166,79 +171,99 @@ class Gui():
         self.video_width = 4
 
         # video options
+        video_options_row = 0
+
         self.video_label = tk.Label(self.root, text="Video Options", font='Helvetica 18 bold')
-        self.video_label.grid(row=0, column=self.video_width+1, padx=self.padx, pady=self.pady)
+        self.video_label.grid(row=video_options_row, column=self.video_width+1, padx=self.padx, pady=self.pady)
 
         self.overlay = True
         self.overlay_button = tk.Button(self.root, text="Toggle Overlay", command=self.overlay_command)
-        self.overlay_button.grid(row=1, column=self.video_width+1, padx=self.padx, pady=self.pady)
-
-        self.recording = False
-        self.record_button = tk.Button(self.root, text="Toggle Recording", command=self.record_command)
-        self.record_button.grid(row=2, column=self.video_width+1, padx=self.padx, pady=self.pady)
-
-        self.screenshot = False
-        self.screenshot_button = tk.Button(self.root, text="Screenshot", command=self.screenshot_command)
-        self.screenshot_button.grid(row=2, column=self.video_width+2, padx=self.padx, pady=self.pady)
+        self.overlay_button.grid(row=video_options_row+1, column=self.video_width+1, padx=self.padx, pady=self.pady)
 
         self.source_id = False
         self.source_button = tk.Button(self.root, text="Toggle Source", command=self.source_command)
-        self.source_button.grid(row=1, column=self.video_width+2, padx=self.padx, pady=self.pady)
+        self.source_button.grid(row=video_options_row+1, column=self.video_width+2, padx=self.padx, pady=self.pady)
+
+        self.tracking_id_label = tk.Label(self.root, text="Guidescope Actions")
+        self.tracking_id_label.grid(row=video_options_row+2, column=self.video_width+1, padx=self.padx, pady=self.pady)
+
+        self.recording = False
+        self.record_button = tk.Button(self.root, text="Toggle Recording", command=lambda: self.record_command(guidescope))
+        self.record_button.grid(row=video_options_row+3, column=self.video_width+1, padx=self.padx, pady=self.pady)
+
+        self.screenshot = False
+        self.screenshot_button = tk.Button(self.root, text="Take Screenshot", command=lambda: self.screenshot_command(guidescope))
+        self.screenshot_button.grid(row=video_options_row+3, column=self.video_width+2, padx=self.padx, pady=self.pady)
+
+        self.tracking_id_label = tk.Label(self.root, text="Main Camera Actions")
+        self.tracking_id_label.grid(row=video_options_row+4, column=self.video_width+1, padx=self.padx, pady=self.pady)
+
+        self.recording = False
+        self.record_button = tk.Button(self.root, text="Toggle Recording", command=lambda: self.record_command(maincam))
+        self.record_button.grid(row=video_options_row+5, column=self.video_width+1, padx=self.padx, pady=self.pady)
+
+        self.screenshot = False
+        self.screenshot_button = tk.Button(self.root, text="Take Screenshot", command=lambda: self.screenshot_command(maincam))
+        self.screenshot_button.grid(row=video_options_row+5, column=self.video_width+2, padx=self.padx, pady=self.pady)
 
         # tracking options
+        tracking_options_row = 7
+
         self.tracking_label = tk.Label(self.root, text="Tracking Options", font='Helvetica 18 bold')
-        self.tracking_label.grid(row=4, column=self.video_width+1, padx=self.padx, pady=self.pady)
+        self.tracking_label.grid(row=tracking_options_row, column=self.video_width+1, padx=self.padx, pady=self.pady)
 
         self.clear_button = tk.Button(self.root, text="Reset Object IDs", command=self.tracker.clear)
-        self.clear_button.grid(row=5, column=self.video_width+2, padx=self.padx, pady=self.pady)
+        self.clear_button.grid(row=tracking_options_row+1, column=self.video_width+2, padx=self.padx, pady=self.pady)
 
         self.tracking = False
         self.tracking_button = tk.Button(self.root, text="Toggle Tracking Mode", command=self.tracker.track)
-        self.tracking_button.grid(row=5, column=self.video_width+1, padx=self.padx, pady=self.pady)
+        self.tracking_button.grid(row=tracking_options_row+1, column=self.video_width+1, padx=self.padx, pady=self.pady)
 
         self.tracking_id_label = tk.Label(self.root, text="Tracking ID")
-        self.tracking_id_label.grid(row=6, column=self.video_width+1, padx=self.padx, pady=self.pady)
+        self.tracking_id_label.grid(row=tracking_options_row+2, column=self.video_width+1, padx=self.padx, pady=self.pady)
 
         self.tracking_id_input = tk.Entry(self.root, justify="right", width=18)
         self.tracking_id_input.insert(tk.END, "0")
-        self.tracking_id_input.grid(row=6, column=self.video_width+2, padx=self.padx, pady=self.pady)
+        self.tracking_id_input.grid(row=tracking_options_row+2, column=self.video_width+2, padx=self.padx, pady=self.pady)
 
         self.min_threshold_label = tk.Label(self.root, text="Minimum Threshold Value")
-        self.min_threshold_label.grid(row=7, column=self.video_width+1, padx=self.padx, pady=self.pady)
+        self.min_threshold_label.grid(row=tracking_options_row+3, column=self.video_width+1, padx=self.padx, pady=self.pady)
 
         self.min_threshold_input = tk.Entry(self.root, justify="right", width=18)
         self.min_threshold_input.insert(tk.END, "20")
-        self.min_threshold_input.grid(row=7, column=self.video_width+2, padx=self.padx, pady=self.pady)
+        self.min_threshold_input.grid(row=tracking_options_row+3, column=self.video_width+2, padx=self.padx, pady=self.pady)
 
         self.min_area_label = tk.Label(self.root, text="Minimum Detection Area")
-        self.min_area_label.grid(row=8, column=self.video_width+1, padx=self.padx, pady=self.pady)
+        self.min_area_label.grid(row=tracking_options_row+4, column=self.video_width+1, padx=self.padx, pady=self.pady)
 
         self.min_area_input = tk.Entry(self.root, justify="right", width=18)
         self.min_area_input.insert(tk.END, "20")
-        self.min_area_input.grid(row=8, column=self.video_width+2, padx=self.padx, pady=self.pady)
+        self.min_area_input.grid(row=tracking_options_row+4, column=self.video_width+2, padx=self.padx, pady=self.pady)
 
         # manual control
+        manual_control_row = 12
+
         self.tracking_label = tk.Label(self.root, text="Manual Control", font='Helvetica 18 bold')
-        self.tracking_label.grid(row=10, column=self.video_width+1, padx=self.padx, pady=self.pady)
+        self.tracking_label.grid(row=manual_control_row, column=self.video_width+1, padx=self.padx, pady=self.pady)
 
         self.up = tk.Button(self.root, text="Up", command=lambda: self.motor_command("elv", True))
-        self.up.grid(row=11, column=self.video_width+1, padx=self.padx, pady=self.pady)
+        self.up.grid(row=manual_control_row+1, column=self.video_width+1, padx=self.padx, pady=self.pady)
 
         self.down = tk.Button(self.root, text="Down", command=lambda: self.motor_command("elv", False))
-        self.down.grid(row=12, column=self.video_width+1, padx=self.padx, pady=self.pady)
+        self.down.grid(row=manual_control_row+2, column=self.video_width+1, padx=self.padx, pady=self.pady)
 
         self.clockwise = tk.Button(self.root, text="Clockwise", command=lambda: self.motor_command("az", False))
-        self.clockwise.grid(row=11, column=self.video_width+2, padx=self.padx, pady=self.pady)
+        self.clockwise.grid(row=manual_control_row+1, column=self.video_width+2, padx=self.padx, pady=self.pady)
 
         self.anticlockwise = tk.Button(self.root, text="Anticlockwise", command=lambda: self.motor_command("az", True))
-        self.anticlockwise.grid(row=12, column=self.video_width+2, padx=self.padx, pady=self.pady)
+        self.anticlockwise.grid(row=manual_control_row+2, column=self.video_width+2, padx=self.padx, pady=self.pady)
 
         self.steps_label = tk.Label(self.root, text="Enter Steps (>=0)")
-        self.steps_label.grid(row=13, column=self.video_width+1, padx=self.padx, pady=self.pady)
+        self.steps_label.grid(row=manual_control_row+3, column=self.video_width+1, padx=self.padx, pady=self.pady)
 
         self.steps_entry = tk.Entry(self.root, justify="right", width=18)
         self.steps_entry.insert(tk.END, "0")
-        self.steps_entry.grid(row=13, column=self.video_width+2, padx=self.padx, pady=self.pady)
+        self.steps_entry.grid(row=manual_control_row+3, column=self.video_width+2, padx=self.padx, pady=self.pady)
 
         self.root.wm_title("Tracking Control Panel")
         self.root.wm_protocol("WM_DELETE_WINDOW", self.on_close)
@@ -347,8 +372,8 @@ class Camera():
         self.id = 0
         self.dimensions = dimensions
 
-        codec = cv2.VideoWriter_fourcc(*'WMV3')
-        fps = 20
+        self.codec = cv2.VideoWriter_fourcc(*'WMV3')
+        self.fps = 20
 
         if test:
             self.vcap = cv2.VideoCapture("guidescope_test_0.mp4", cv2.CAP_ANY)
@@ -356,12 +381,12 @@ class Camera():
             self.vcap = cv2.VideoCapture(self.id, cv2.CAP_ANY)
         self.vcap.set(cv2.CAP_PROP_FRAME_WIDTH, self.dimensions[0])
         self.vcap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.dimensions[1])
-        self.vcap.set(cv2.CAP_PROP_FOURCC, codec)
+        self.vcap.set(cv2.CAP_PROP_FOURCC, self.codec)
         self.ret = False
         self.frame = None
 
         self.recording = False
-        self.vwriter = cv2.VideoWriter(f"{self.name}_out.wmv", codec, fps, self.dimensions)
+        self.vwriter = None
 
         print(f"{name} open")
 
@@ -369,9 +394,24 @@ class Camera():
         if self.vcap.grab():
             self.ret, self.frame = self.vcap.retrieve()
 
+    def start_video(self):
+        self.recording = True
+        self.vwriter = cv2.VideoWriter(f"{self.name}_out.wmv", self.codec, self.fps, GUIDESCOPE_RESOLUTION)
+        print(f"Recording {self.name}.")
+
+    def stop_video(self):
+        self.recording = False
+        print(f"Saved {self.name}_out.wmv")
+        self.vwriter.release()
+
+    def write_frame(self):
+        if self.recording:
+            out = cv2.resize(self.frame, GUIDESCOPE_RESOLUTION)
+            self.vwriter.write(out)
+
 # sends a movement command to a given motor
 # movement based on given steps
-def move_motor(motor, steps):
+def move_motor(motor, steps, ser):
     # commands are enclosed with <>
     # a/b for elevation/azimuth motor respectively
     # +/- for anticlockwise/clockwise, up/down respectively
@@ -451,7 +491,7 @@ def main():
     tracker = Tracker()
 
     # GUI setup
-    gui = Gui(tracker)
+    gui = Gui(tracker, ser, guidescope, maincam)
 
     # main tracking loop
     # run until user closes GUI
@@ -497,7 +537,17 @@ def main():
         gui.update_video(guidescope.frame, maincam.frame, loop_time)
         gui.root.update()
 
+        # record frames to video
+        guidescope.write_frame()
+        maincam.write_frame()
+
     # close serial connection
     ser.close()
+
+    # close video writers
+    if guidescope.recording:
+        guidescope.vwriter.release()
+    if maincam.recording:
+        maincam.vwriter.release()
 
     print("Done.")
