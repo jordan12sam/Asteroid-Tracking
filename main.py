@@ -13,7 +13,12 @@ os.environ["OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS"] = "0"
 import cv2
 from scipy.optimize import linear_sum_assignment
 
-# global states
+# global constants
+# motor specs
+STEP_SIZE_ARCSEC = 6480
+GEAR_RATIO = 50
+STEP_SIZE_ARCSEC /= GEAR_RATIO
+
 # camera specs
 GUIDESCOPE_FOV_ARCSEC = (6876, 3852)
 GUIDESCOPE_RESOLUTION = (1920, 1080)
@@ -21,12 +26,8 @@ GUIDESCOPE_RESOLUTION = (1920, 1080)
 MAINCAM_FOV_ARCSEC = (1100.16, 790.56)
 MAINCAM_RESOLUTION = (3856, 2764)
 
-#select the communication port and open
-ser = serial.Serial("COM3", 9600)
-ser.timeout = 1
-if not ser.isOpen():
-    ser.open()
-    time.sleep(2)
+# serial communications
+BAUD_RATE = 9600
 
 # tracker object
 # tracks objects across frames
@@ -41,6 +42,7 @@ class Tracker:
         self.tracking = False
         self.target_id = 57
         self.target_pos = (0, 0)
+        self.command_timer = time.perf_counter()
 
     # toggle the tracking param
     # when True, the motors will follow the target object
@@ -140,6 +142,7 @@ class Gui():
             steps *= -1
         try:
             move_motor(motor, steps)
+            print(f"Moving {motor} motor {steps} steps")
         except ValueError as e:
             print(e)
     
@@ -340,6 +343,7 @@ class Gui():
 # camera object
 class Camera():
     def __init__(self, dimensions, name, test=False):
+        self.name = name
         self.id = 0
         self.dimensions = dimensions
 
@@ -353,16 +357,17 @@ class Camera():
         self.vcap.set(cv2.CAP_PROP_FRAME_WIDTH, self.dimensions[0])
         self.vcap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.dimensions[1])
         self.vcap.set(cv2.CAP_PROP_FOURCC, codec)
-    #    self.ret = False
-    #    self.frame = None
+        self.ret = False
+        self.frame = None
 
         self.recording = False
-        self.vwriter = cv2.VideoWriter(f"{name}_out.wmv", codec, fps, self.dimensions)
+        self.vwriter = cv2.VideoWriter(f"{self.name}_out.wmv", codec, fps, self.dimensions)
 
         print(f"{name} open")
 
-    #def update_frame(self):
-    #    self.ret, self.frame = self.vcap.read()
+    def update_frame(self):
+        if self.vcap.grab():
+            self.ret, self.frame = self.vcap.retrieve()
 
 # sends a movement command to a given motor
 # movement based on given steps
@@ -391,7 +396,6 @@ def move_motor(motor, steps):
     
     cmd += str(abs(steps))
     cmd += ">"
-    print(f"sending: {cmd}")
 
     # commands must be encoded using utf-8
     # command is then sent to the arduino
@@ -430,6 +434,12 @@ def main():
     # main setup
     print("Starting main...")
 
+    ser = serial.Serial("COM3", BAUD_RATE)
+    ser.timeout = 1
+    if not ser.isOpen():
+        ser.open()
+        time.sleep(2)
+
     guidescope = Camera(GUIDESCOPE_RESOLUTION, "guidescope", test=True)
     maincam = Camera(MAINCAM_RESOLUTION, "maincam")
 
@@ -449,35 +459,42 @@ def main():
         # start timer for fps
         loop_time = time.perf_counter()
 
-        # get new frame
-        ret, guide_frame = guidescope.vcap.read()
-        guide_frame = cv2.rotate(guide_frame, cv2.ROTATE_180)
+        # get new frames
+        guidescope.update_frame()
+        guidescope.frame = cv2.rotate(guidescope.frame, cv2.ROTATE_180)
+        maincam.update_frame()
 
-        # skip loop if there is no new frame;
-        if not ret:
-            continue
+        # skip tracking loop if there is no new guidescope frame;
+        if guidescope.ret:
+            # get a list of bounding rectangles for each object in frame
+            object_bounding_rectangles = get_bounding_rectangles(guidescope.frame, int(gui.min_area_input.get()), int(gui.min_threshold_input.get()))
 
-        _ , main_frame = maincam.vcap.read()
+            # get a list of objects with ids
+            tracker.update(object_bounding_rectangles)
 
+            # update tracking id
+            gui.update_tracking_id()
 
-        # get a list of bounding rectangles for each object in frame
-        object_bounding_rectangles = get_bounding_rectangles(guide_frame, int(gui.min_area_input.get()), int(gui.min_threshold_input.get()))
+            # move the motors if we are tracking an object
+            # will only execute every .5 seconds max
+            # sending commands too quickly seems to overwhelm the serial connection
+            if tracker.tracking and time.perf_counter() - tracker.command_timer > 0.5:
+                # calculate steps to take
+                x, y = tracker.target_pos
+                x_mov = guidescope.dimensions[0]/2 - x
+                y_mov = guidescope.dimensions[1]/2 - y
+                x_mov *= (x_mov / guidescope.dimensions[0]) * (GUIDESCOPE_FOV_ARCSEC[0] / STEP_SIZE_ARCSEC)
+                y_mov *= (y_mov / guidescope.dimensions[1]) * (GUIDESCOPE_FOV_ARCSEC[1] / STEP_SIZE_ARCSEC)
 
-        # get a list of objects with ids
-        tracker.update(object_bounding_rectangles)
+                # take steps
+                move_motor("az", x_mov)
+                move_motor("elv", y_mov)
 
-        # update tracking id
-        gui.update_tracking_id()
-
-        # move the motors if we are tracking an object
-        if tracker.tracking:
-            x, y = tracker.target_pos
-            x_mov = guidescope.dimensions[0]/2 - x
-            y_mov = guidescope.dimensions[1]/2 - y
-            #print(f"{x_mov}, {y_mov}")
+                # update timer
+                tracker.command_timer = time.perf_counter()
 
         # send video to gui
-        gui.update_video(guide_frame, main_frame, loop_time)
+        gui.update_video(guidescope.frame, maincam.frame, loop_time)
         gui.root.update()
 
     # close serial connection
