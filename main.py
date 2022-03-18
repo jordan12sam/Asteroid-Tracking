@@ -1,11 +1,8 @@
 from collections import deque
 from datetime import datetime
-from pickle import TRUE
-from turtle import clear
 from PIL import Image, ImageTk
 import numpy as np
 import tkinter as tk
-from pandas_datareader import test
 import serial
 import time
 
@@ -345,7 +342,7 @@ class Gui():
         # OpenCV represents images in BGR order; however PIL
         # represents images in RGB order, so we need to swap
         # the channels, then convert to PIL and ImageTk format
-        image = cv2.resize(self.show_frame, (1024, 576))
+        image = cv2.resize(self.show_frame, (768, 432))
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         image = Image.fromarray(image)
         image = ImageTk.PhotoImage(image)
@@ -494,7 +491,7 @@ def main():
     # main setup
     print("Starting main...")
 
-    ser = serial.Serial("COM3", BAUD_RATE)
+    ser = serial.Serial("COM4", BAUD_RATE)
     ser.timeout = 1
     if not ser.isOpen():
         ser.open()
