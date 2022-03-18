@@ -1,6 +1,7 @@
 from collections import deque
 from datetime import datetime
 from pickle import TRUE
+from turtle import clear
 from PIL import Image, ImageTk
 import numpy as np
 import tkinter as tk
@@ -38,9 +39,10 @@ class Tracker:
         #id : x, y, width, height, dx, dy, memory
         self.previous_objects = {}
         self.objects = {}
+        self.active = False
 
         # info for the target object
-        self.tracking = False
+        self.target_tracking = False
         self.target_id = 57
         self.target_pos = (0, 0)
         self.command_timer = time.perf_counter()
@@ -48,73 +50,84 @@ class Tracker:
     # toggle the tracking param
     # when True, the motors will follow the target object
     def track(self):
-        self.tracking = not self.tracking
+        self.target_tracking = not self.target_tracking
 
     # assign ids to the objects in a new frame
     def update(self, detection):
-        #number of frames missing objects are remembered for
-        MEMORY = 100
-        #an artificial cost to add to the list 
-        #matches with missing objects
-        THRESHOLD = 20
+        if self.active:
+            #number of frames missing objects are remembered for
+            MEMORY = 100
+            #an artificial cost to add to the list 
+            #matches with missing objects
+            THRESHOLD = 20
 
-        #clear current list
-        self.objects = {}
+            #clear current list
+            self.objects = {}
 
-        #defines a cost function for the graph
-        #uses euclidean distance
-        #has dummy nodes to match to incase of new objects
-        cost =  [[((t_x - d_x)**2 + (t_y - d_y)**2)**0.5 
-                    for t_x, t_y, _, _, _, _, _ in self.previous_objects.values()] 
-                    for d_x, d_y, _, _ in detection]
-        cost = [(*costs, *([THRESHOLD]*len(detection))) for costs in cost]
+            #defines a cost function for the graph
+            #uses euclidean distance
+            #has dummy nodes to match to incase of new objects
+            cost =  [[((t_x - d_x)**2 + (t_y - d_y)**2)**0.5 
+                        for t_x, t_y, _, _, _, _, _ in self.previous_objects.values()] 
+                        for d_x, d_y, _, _ in detection]
+            cost = [(*costs, *([THRESHOLD]*len(detection))) for costs in cost]
 
-        #special case of empty list (for when there are no current detections)
-        if not cost:
-            cost = [[]]
+            #special case of empty list (for when there are no current detections)
+            if not cost:
+                cost = [[]]
 
-        #uses the hungarian algorithm to create a minimum cost sum of the matches
-        matches = dict(zip(*linear_sum_assignment(cost)))
+            #uses the hungarian algorithm to create a minimum cost sum of the matches
+            matches = dict(zip(*linear_sum_assignment(cost)))
 
-        #new id iterator
-        new_id = max(self.previous_objects.keys(), default=-1)
+            #new id iterator
+            new_id = max(self.previous_objects.keys(), default=-1)
 
-        for key, value in matches.items():
-            #for new objects
-            if value >= len(self.previous_objects):
-                #set the value to a new id
-                new_id += 1
-                matches[key] = new_id
-            #for matched objects
-            elif value < len(self.previous_objects):
-                #set the value to the matched id
-                matches[key] = list(self.previous_objects.keys())[value]
+            for key, value in matches.items():
+                #for new objects
+                if value >= len(self.previous_objects):
+                    #set the value to a new id
+                    new_id += 1
+                    matches[key] = new_id
+                #for matched objects
+                elif value < len(self.previous_objects):
+                    #set the value to the matched id
+                    matches[key] = list(self.previous_objects.keys())[value]
 
-        for key, value in matches.items():
-            #for matched objects
-            if value in self.previous_objects.keys():
-                #compute the change in position
-                #and set memory to 0
-                self.objects[value] = (*detection[key], 
-                                        detection[key][0] - self.previous_objects[value][0],
-                                        detection[key][1] - self.previous_objects[value][1],
-                                        0)
-            #for new objects
-            elif value not in self.previous_objects.keys():
-                #set dx, dy = 0, 0
-                #and set memory to 0
-                self.objects[value] = (*detection[key], 0, 0, 0)
+            for key, value in matches.items():
+                #for matched objects
+                if value in self.previous_objects.keys():
+                    #compute the change in position
+                    #and set memory to 0
+                    self.objects[value] = (*detection[key], 
+                                            detection[key][0] - self.previous_objects[value][0],
+                                            detection[key][1] - self.previous_objects[value][1],
+                                            0)
+                #for new objects
+                elif value not in self.previous_objects.keys():
+                    #set dx, dy = 0, 0
+                    #and set memory to 0
+                    self.objects[value] = (*detection[key], 0, 0, 0)
 
-        for key, value in self.previous_objects.items():
-            #for old objects that arent matched in the new frame
-            #and havent been lost for 10 or more frames
-            #compute their new position using x += dx, y += dy
-            #rectangle h, w = 0, 0
-            if key not in self.objects.keys() and value[6] < MEMORY:
-                self.objects[key] = (value[0] + value[4], value[1] + value[5],
-                                        0, 0, value[4], value[5], value[6] + 1)
+            for key, value in self.previous_objects.items():
+                #for old objects that arent matched in the new frame
+                #and havent been lost for 10 or more frames
+                #compute their new position using x += dx, y += dy
+                #rectangle h, w = 0, 0
+                if key not in self.objects.keys() and value[6] < MEMORY:
+                    self.objects[key] = (value[0] + value[4], value[1] + value[5],
+                                            0, 0, value[4], value[5], value[6] + 1)
 
-        self.previous_objects = self.objects
+            self.previous_objects = self.objects
+        elif not self.active:
+            self.clear()
+
+    def switch(self):
+        self.active = not self.active
+        if not self.active:
+            print("Object Tracking Off")
+            self.clear
+        else:
+            print("Object Tracking On")
 
     # clear the memory of the tracker
     def clear(self):
@@ -212,11 +225,11 @@ class Gui():
         self.tracking_label = tk.Label(self.root, text="Tracking Options", font='Helvetica 18 bold')
         self.tracking_label.grid(row=tracking_options_row, column=self.video_width+1, padx=self.padx, pady=self.pady)
 
-        self.clear_button = tk.Button(self.root, text="Reset Object IDs", command=self.tracker.clear)
+        self.clear_button = tk.Button(self.root, text="Toggle Object Tracking", command=self.tracker.switch)
         self.clear_button.grid(row=tracking_options_row+1, column=self.video_width+2, padx=self.padx, pady=self.pady)
 
         self.tracking = False
-        self.tracking_button = tk.Button(self.root, text="Toggle Tracking Mode", command=self.tracker.track)
+        self.tracking_button = tk.Button(self.root, text="Toggle Target Tracking", command=self.tracker.track)
         self.tracking_button.grid(row=tracking_options_row+1, column=self.video_width+1, padx=self.padx, pady=self.pady)
 
         self.tracking_id_label = tk.Label(self.root, text="Tracking ID")
@@ -285,7 +298,7 @@ class Gui():
         cv2.rectangle(self.show_frame, ((x-w)//2, (y-h)//2), ((x+w)//2, (y+h)//2), (0, 0, 255), 1)
 
         # write tracking id on frame
-        if self.tracker.tracking:
+        if self.tracker.target_tracking:
             self.show_frame = cv2.putText(self.show_frame, f"Tracking", 
                                         (5, y-25), 
                                         cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 2)
@@ -299,7 +312,7 @@ class Gui():
             # if this is the object we are tracking
             # then change the colour from blue to red
             # else leave it as blue
-            if id == self.tracker.target_id and self.tracker.tracking:
+            if id == self.tracker.target_id and self.tracker.target_tracking:
                 self.tracker.target_pos = (x, y)
                 text_colour = (0, 0, 255)
                 box_colour = (0, 0, 255)
@@ -314,10 +327,6 @@ class Gui():
         # update fps counter
         loop_time = time.perf_counter() - loop_time
         cv2.putText(self.show_frame, f"{1/loop_time:02.2f} FPS", (5, 15), cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 2)
-
-        if self.recording:
-            # write 'recording' in bottom left of frame to notify user the video feed is being recorded
-            cv2.putText(self.show_frame, f"Recording", (5, 30), cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 2)
 
     def update_video(self, guide_frame, main_frame, loop_time):
         # save raw input image
@@ -446,6 +455,17 @@ def move_motor(motor, steps, ser):
 # detects objects in the frame
 # returns a list of object coordinates and sizes
 def get_bounding_rectangles(frame, min_area, threshold_val):
+    # check min area and threshold values
+    try:
+        min_area = int(min_area)
+    except ValueError:
+        min_area = 20
+
+    try:
+        threshold_val = int(threshold_val)
+    except ValueError:
+        threshold_val = 20
+
     #greyscale and blur both the current and previous frame
     frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     frame = cv2.GaussianBlur(frame, (11,11), 0)
@@ -507,7 +527,7 @@ def main():
         # skip tracking loop if there is no new guidescope frame;
         if guidescope.ret:
             # get a list of bounding rectangles for each object in frame
-            object_bounding_rectangles = get_bounding_rectangles(guidescope.frame, int(gui.min_area_input.get()), int(gui.min_threshold_input.get()))
+            object_bounding_rectangles = get_bounding_rectangles(guidescope.frame, gui.min_area_input.get(), gui.min_threshold_input.get())
 
             # get a list of objects with ids
             tracker.update(object_bounding_rectangles)
@@ -518,7 +538,7 @@ def main():
             # move the motors if we are tracking an object
             # will only execute every .5 seconds max
             # sending commands too quickly seems to overwhelm the serial connection
-            if tracker.tracking and time.perf_counter() - tracker.command_timer > 0.5:
+            if tracker.target_tracking and time.perf_counter() - tracker.command_timer > 0.5:
                 # calculate steps to take
                 x, y = tracker.target_pos
                 x_mov = guidescope.dimensions[0]/2 - x
@@ -527,8 +547,8 @@ def main():
                 y_mov *= (y_mov / guidescope.dimensions[1]) * (GUIDESCOPE_FOV_ARCSEC[1] / STEP_SIZE_ARCSEC)
 
                 # take steps
-                move_motor("az", x_mov)
-                move_motor("elv", y_mov)
+                move_motor("az", x_mov, ser)
+                move_motor("elv", y_mov, ser)
 
                 # update timer
                 tracker.command_timer = time.perf_counter()
