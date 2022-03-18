@@ -3,6 +3,7 @@ from datetime import datetime
 from PIL import Image, ImageTk
 import numpy as np
 import tkinter as tk
+from pandas_datareader import test
 import serial
 import time
 
@@ -12,8 +13,16 @@ os.environ["OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS"] = "0"
 import cv2
 from scipy.optimize import linear_sum_assignment
 
+# global states
+# camera specs
+GUIDESCOPE_FOV_ARCSEC = (6876, 3852)
+GUIDESCOPE_RESOLUTION = (1920, 1080)
+
+MAINCAM_FOV_ARCSEC = (1100.16, 790.56)
+MAINCAM_RESOLUTION = (3856, 2764)
+
 #select the communication port and open
-ser = serial.Serial("COM4", 9600)
+ser = serial.Serial("COM3", 9600)
 ser.timeout = 1
 if not ser.isOpen():
     ser.open()
@@ -213,7 +222,9 @@ class Gui():
         # main FOV 0.3056deg x 0.2196deg
         # guide FOV 1.91deg x 1.07deg
         # thus the main FOV is bounded by the centre 20.5% x 16% of the guide frame
-        (h, w) = (int(0.205*y), int(0.16*x))
+        fov_x = MAINCAM_FOV_ARCSEC[0] / GUIDESCOPE_FOV_ARCSEC[0]
+        fov_y = MAINCAM_FOV_ARCSEC[1] / GUIDESCOPE_FOV_ARCSEC[1]
+        (w, h) = (int(fov_x*x), int(fov_y*y))
         cv2.rectangle(self.show_frame, ((x-w)//2, (y-h)//2), ((x+w)//2, (y+h)//2), (0, 0, 255), 1)
 
         # write tracking id on frame
@@ -297,6 +308,28 @@ class Gui():
         self.root.destroy()
         self.root.quit()
 
+# camera object
+class Camera():
+    def __init__(self, dimensions, name, test=False):
+        self.id = 0
+        self.dimensions = dimensions
+
+        codec = cv2.VideoWriter_fourcc(*'WMV3')
+        fps = 20
+
+        if test:
+            self.vcap = cv2.VideoCapture("guidescope_test_0.mp4", cv2.CAP_ANY)
+        elif not test:
+            self.vcap = cv2.VideoCapture(self.id, cv2.CAP_ANY)
+        self.vcap.set(cv2.CAP_PROP_FRAME_WIDTH, self.dimensions[0])
+        self.vcap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.dimensions[1])
+        self.vcap.set(cv2.CAP_PROP_FOURCC, codec)
+
+        self.recording = False
+        self.vwriter = cv2.VideoWriter(f"{name}_out.wmv", codec, fps, self.dimensions)
+
+        print(f"{name} open")
+
 # sends a movement command to a given motor
 # movement based on given steps
 def move_motor(motor, steps):
@@ -361,37 +394,16 @@ def get_bounding_rectangles(frame):
 
     return object_bounding_rectangles
 
+def camera_setup():
+    pass
+
 def main():
 
     # main setup
     print("Starting main...")
 
-    # define camera dimensions
-    guide_dimensions = (1920, 1080)
-    main_dimensions = (3856, 2764)
-
-    # define video output settings
-    codec = cv2.VideoWriter_fourcc(*'WMV3')
-    fps = 20
-    guide_out = cv2.VideoWriter('guide_out.wmv', codec, fps, guide_dimensions)
-    #main_out = cv2.VideoWriter('main_out.wmv', codec, fps, guide_dimensions)
-
-    # define camera inputs
-    #guide_in = cv2.VideoCapture(0, cv2.CAP_ANY)
-    guide_in = cv2.VideoCapture("guidescope_test_0.mp4")
-    guide_in.set(cv2.CAP_PROP_FRAME_WIDTH, guide_dimensions[0])
-    guide_in.set(cv2.CAP_PROP_FRAME_HEIGHT, guide_dimensions[1])
-    guide_in.set(cv2.CAP_PROP_FOURCC, codec)
-    guide_dimensions = (int(guide_in.get(cv2.CAP_PROP_FRAME_WIDTH)),
-                        int(guide_in.get(cv2.CAP_PROP_FRAME_HEIGHT)))
-    print("Guidescope open")
-
-    main_in = cv2.VideoCapture(0, cv2.CAP_ANY)
-    #main_in = cv2.VideoCapture("guidescope_test_1.mp4")
-    main_in.set(cv2.CAP_PROP_FRAME_WIDTH, main_dimensions[0])
-    main_in.set(cv2.CAP_PROP_FRAME_HEIGHT, main_dimensions[1])
-    main_in.set(cv2.CAP_PROP_FOURCC, codec)
-    print("Main Camera open")
+    guidescope = Camera(GUIDESCOPE_RESOLUTION, "guidescope", test=True)
+    maincam = Camera(MAINCAM_RESOLUTION, "maincam")
 
     #CALIBRATE
 
@@ -410,7 +422,7 @@ def main():
         loop_time = time.perf_counter()
 
         # get new frame
-        ret, guide_frame = guide_in.read()
+        ret, guide_frame = guidescope.vcap.read()
         guide_frame = cv2.rotate(guide_frame, cv2.ROTATE_180)
 
         # break if there is no new frame;
@@ -418,7 +430,7 @@ def main():
         if not ret:
             break
 
-        _ , main_frame = main_in.read()
+        _ , main_frame = maincam.vcap.read()
 
         # get a list of bounding rectangles for each object in frame
         object_bounding_rectangles = get_bounding_rectangles(guide_frame)
@@ -432,22 +444,15 @@ def main():
         # move the motors if we are tracking an object
         if tracker.tracking:
             x, y = tracker.target_pos
-            x_mov = guide_dimensions[0]/2 - x
-            y_mov = guide_dimensions[1]/2 - y
+            x_mov = guidescope.dimensions[0]/2 - x
+            y_mov = guidescope.dimensions[1]/2 - y
             #print(f"{x_mov}, {y_mov}")
 
         # send video to gui
         gui.update_video(guide_frame, main_frame, loop_time)
         gui.root.update()
 
-        # save frame
-        if gui.recording:
-            # save frame to video file
-            guide_out.write(gui.guide_frame)
-            #main_out.write(cv2.resize(main_frame, guide_dimensions))
-
-    guide_out.release()
-    #main_out.release()
+    # close serial connection
     ser.close()
 
     print("Done.")
