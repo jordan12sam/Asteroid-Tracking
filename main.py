@@ -134,9 +134,12 @@ class Gui():
         cv2.imwrite(f".\screenshots\guide_{file_time}.png", self.guide_frame)
         print(f"Saving screenchot as \"{file_time}\"")
     
-    def motor_command(self, motor):
+    def motor_command(self, motor, dir):
+        steps = abs(int(self.steps_entry.get()))
+        if not dir:
+            steps *= -1
         try:
-            move_motor(motor, int(self.steps_entry.get()))
+            move_motor(motor, steps)
         except ValueError as e:
             print(e)
     
@@ -160,7 +163,7 @@ class Gui():
         self.video_width = 4
 
         # video options
-        self.video_label = tk.Label(self.root, text="Video Options")
+        self.video_label = tk.Label(self.root, text="Video Options", font='Helvetica 18 bold')
         self.video_label.grid(row=0, column=self.video_width+1, padx=self.padx, pady=self.pady)
 
         self.overlay = True
@@ -169,44 +172,70 @@ class Gui():
 
         self.recording = False
         self.record_button = tk.Button(self.root, text="Toggle Recording", command=self.record_command)
-        self.record_button.grid(row=1, column=self.video_width+2, padx=self.padx, pady=self.pady)
+        self.record_button.grid(row=2, column=self.video_width+1, padx=self.padx, pady=self.pady)
 
         self.screenshot = False
         self.screenshot_button = tk.Button(self.root, text="Screenshot", command=self.screenshot_command)
-        self.screenshot_button.grid(row=2, column=self.video_width+1, padx=self.padx, pady=self.pady)
+        self.screenshot_button.grid(row=2, column=self.video_width+2, padx=self.padx, pady=self.pady)
 
         self.source_id = False
         self.source_button = tk.Button(self.root, text="Toggle Source", command=self.source_command)
-        self.source_button.grid(row=2, column=self.video_width+2, padx=self.padx, pady=self.pady)
+        self.source_button.grid(row=1, column=self.video_width+2, padx=self.padx, pady=self.pady)
 
         # tracking options
-        self.tracking_label = tk.Label(self.root, text="Tracking Options")
+        self.tracking_label = tk.Label(self.root, text="Tracking Options", font='Helvetica 18 bold')
         self.tracking_label.grid(row=4, column=self.video_width+1, padx=self.padx, pady=self.pady)
 
         self.clear_button = tk.Button(self.root, text="Reset Object IDs", command=self.tracker.clear)
-        self.clear_button.grid(row=6, column=self.video_width+1, padx=self.padx, pady=self.pady)
+        self.clear_button.grid(row=5, column=self.video_width+2, padx=self.padx, pady=self.pady)
 
         self.tracking = False
         self.tracking_button = tk.Button(self.root, text="Toggle Tracking Mode", command=self.tracker.track)
         self.tracking_button.grid(row=5, column=self.video_width+1, padx=self.padx, pady=self.pady)
 
+        self.tracking_id_label = tk.Label(self.root, text="Tracking ID")
+        self.tracking_id_label.grid(row=6, column=self.video_width+1, padx=self.padx, pady=self.pady)
+
         self.tracking_id_input = tk.Entry(self.root, justify="right", width=18)
-        self.tracking_id_input.insert(tk.END, "Enter Tracking ID")
-        self.tracking_id_input.grid(row=5, column=self.video_width+2, padx=self.padx, pady=self.pady)
+        self.tracking_id_input.insert(tk.END, "0")
+        self.tracking_id_input.grid(row=6, column=self.video_width+2, padx=self.padx, pady=self.pady)
+
+        self.min_threshold_label = tk.Label(self.root, text="Minimum Threshold Value")
+        self.min_threshold_label.grid(row=7, column=self.video_width+1, padx=self.padx, pady=self.pady)
+
+        self.min_threshold_input = tk.Entry(self.root, justify="right", width=18)
+        self.min_threshold_input.insert(tk.END, "20")
+        self.min_threshold_input.grid(row=7, column=self.video_width+2, padx=self.padx, pady=self.pady)
+
+        self.min_area_label = tk.Label(self.root, text="Minimum Detection Area")
+        self.min_area_label.grid(row=8, column=self.video_width+1, padx=self.padx, pady=self.pady)
+
+        self.min_area_input = tk.Entry(self.root, justify="right", width=18)
+        self.min_area_input.insert(tk.END, "20")
+        self.min_area_input.grid(row=8, column=self.video_width+2, padx=self.padx, pady=self.pady)
 
         # manual control
-        self.tracking_label = tk.Label(self.root, text="Manual Control")
-        self.tracking_label.grid(row=8, column=self.video_width+1, padx=self.padx, pady=self.pady)
+        self.tracking_label = tk.Label(self.root, text="Manual Control", font='Helvetica 18 bold')
+        self.tracking_label.grid(row=10, column=self.video_width+1, padx=self.padx, pady=self.pady)
 
-        self.up = tk.Button(self.root, text="Move Azimuth", command=lambda: self.motor_command("az"))
-        self.up.grid(row=9, column=self.video_width+1, padx=self.padx, pady=self.pady)
+        self.up = tk.Button(self.root, text="Up", command=lambda: self.motor_command("elv", True))
+        self.up.grid(row=11, column=self.video_width+1, padx=self.padx, pady=self.pady)
 
-        self.left = tk.Button(self.root, text="Move Elevation", command=lambda: self.motor_command("elv"))
-        self.left.grid(row=9, column=self.video_width+2, padx=self.padx, pady=self.pady)
+        self.down = tk.Button(self.root, text="Down", command=lambda: self.motor_command("elv", False))
+        self.down.grid(row=12, column=self.video_width+1, padx=self.padx, pady=self.pady)
+
+        self.clockwise = tk.Button(self.root, text="Clockwise", command=lambda: self.motor_command("az", False))
+        self.clockwise.grid(row=11, column=self.video_width+2, padx=self.padx, pady=self.pady)
+
+        self.anticlockwise = tk.Button(self.root, text="Anticlockwise", command=lambda: self.motor_command("az", True))
+        self.anticlockwise.grid(row=12, column=self.video_width+2, padx=self.padx, pady=self.pady)
+
+        self.steps_label = tk.Label(self.root, text="Enter Steps (>=0)")
+        self.steps_label.grid(row=13, column=self.video_width+1, padx=self.padx, pady=self.pady)
 
         self.steps_entry = tk.Entry(self.root, justify="right", width=18)
-        self.steps_entry.insert(tk.END, "Enter Steps")
-        self.steps_entry.grid(row=10, column=self.video_width+1, padx=self.padx, pady=self.pady)
+        self.steps_entry.insert(tk.END, "0")
+        self.steps_entry.grid(row=13, column=self.video_width+2, padx=self.padx, pady=self.pady)
 
         self.root.wm_title("Tracking Control Panel")
         self.root.wm_protocol("WM_DELETE_WINDOW", self.on_close)
@@ -324,11 +353,16 @@ class Camera():
         self.vcap.set(cv2.CAP_PROP_FRAME_WIDTH, self.dimensions[0])
         self.vcap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.dimensions[1])
         self.vcap.set(cv2.CAP_PROP_FOURCC, codec)
+    #    self.ret = False
+    #    self.frame = None
 
         self.recording = False
         self.vwriter = cv2.VideoWriter(f"{name}_out.wmv", codec, fps, self.dimensions)
 
         print(f"{name} open")
+
+    #def update_frame(self):
+    #    self.ret, self.frame = self.vcap.read()
 
 # sends a movement command to a given motor
 # movement based on given steps
@@ -367,7 +401,7 @@ def move_motor(motor, steps):
 
 # detects objects in the frame
 # returns a list of object coordinates and sizes
-def get_bounding_rectangles(frame):
+def get_bounding_rectangles(frame, min_area, threshold_val):
     #greyscale and blur both the current and previous frame
     frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     frame = cv2.GaussianBlur(frame, (11,11), 0)
@@ -375,27 +409,21 @@ def get_bounding_rectangles(frame):
     #take threshold of frame
     #dilate and erode to join fragmented objects
     #get a list of edges and their positions
-    _, threshold = cv2.threshold(frame, 20, 255, cv2.THRESH_BINARY)
+    _, threshold = cv2.threshold(frame, threshold_val, 255, cv2.THRESH_BINARY)
     dilated = cv2.dilate(threshold, None, iterations = 1)
     eroded = cv2.erode(dilated, None, iterations = 1)
     edges, _ = cv2.findContours(eroded, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-
-    #size restrictions for what constitutes an object
-    min_area = 10
-    max_area = 2000000
 
     #initialise an empty list to hold object bounding rectangles, (x, y, width, height)
     object_bounding_rectangles = []
 
     #loop through list of valid objects and store their positions
     for edge in edges:
-        if min_area < cv2.contourArea(edge)  < max_area:
+        if min_area < cv2.contourArea(edge):
             object_bounding_rectangles.append(cv2.boundingRect(edge))
 
     return object_bounding_rectangles
 
-def camera_setup():
-    pass
 
 def main():
 
@@ -425,15 +453,15 @@ def main():
         ret, guide_frame = guidescope.vcap.read()
         guide_frame = cv2.rotate(guide_frame, cv2.ROTATE_180)
 
-        # break if there is no new frame;
-        # i.e. if the test video ends
+        # skip loop if there is no new frame;
         if not ret:
-            break
+            continue
 
         _ , main_frame = maincam.vcap.read()
 
+
         # get a list of bounding rectangles for each object in frame
-        object_bounding_rectangles = get_bounding_rectangles(guide_frame)
+        object_bounding_rectangles = get_bounding_rectangles(guide_frame, int(gui.min_area_input.get()), int(gui.min_threshold_input.get()))
 
         # get a list of objects with ids
         tracker.update(object_bounding_rectangles)
