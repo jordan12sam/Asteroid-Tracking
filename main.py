@@ -1,4 +1,4 @@
-from collections import deque
+from itertools import count
 from datetime import datetime
 from PIL import Image, ImageTk
 import numpy as np
@@ -163,9 +163,9 @@ class Gui():
     def source_command(self):
         self.source_id = not self.source_id
 
-    def __init__(self, tracker, ser, guidescope, maincam):
+    def __init__(self, tracker, guidescope, maincam):
         self.tracker = tracker
-        self.ser = ser
+        self.ser = None
 
         self.root = tk.Tk()
         self.open = True
@@ -342,7 +342,7 @@ class Gui():
         # OpenCV represents images in BGR order; however PIL
         # represents images in RGB order, so we need to swap
         # the channels, then convert to PIL and ImageTk format
-        image = cv2.resize(self.show_frame, (768, 432))
+        image = cv2.resize(self.show_frame, (1024, 576))
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         image = Image.fromarray(image)
         image = ImageTk.PhotoImage(image)
@@ -399,6 +399,9 @@ class Camera():
     def update_frame(self):
         if self.vcap.grab():
             self.ret, self.frame = self.vcap.retrieve()
+        else:
+            print(f"{self.name} disconnected")
+            self.ret = False
 
     def start_video(self):
         self.recording = True
@@ -417,7 +420,7 @@ class Camera():
 
 # sends a movement command to a given motor
 # movement based on given steps
-def move_motor(motor, steps, ser):
+def move_motor(motor, steps, ser, _count=count(1)):
     # commands are enclosed with <>
     # a/b for elevation/azimuth motor respectively
     # +/- for anticlockwise/clockwise, up/down respectively
@@ -448,6 +451,8 @@ def move_motor(motor, steps, ser):
 
     cmd = cmd.encode("utf-8")
     ser.write(cmd)
+
+    return next(_count)
 
 # detects objects in the frame
 # returns a list of object coordinates and sizes
@@ -485,17 +490,20 @@ def get_bounding_rectangles(frame, min_area, threshold_val):
 
     return object_bounding_rectangles
 
+# open serial comms
+def open_serial(gui):
+    ser = serial.Serial("COM3", BAUD_RATE)
+    ser.timeout = 1
+    if not ser.isOpen():
+        ser.open()
+        time.sleep(0.5)
+    gui.ser = ser
+    return ser
 
 def main():
 
     # main setup
     print("Starting main...")
-
-    ser = serial.Serial("COM4", BAUD_RATE)
-    ser.timeout = 1
-    if not ser.isOpen():
-        ser.open()
-        time.sleep(2)
 
     guidescope = Camera(GUIDESCOPE_RESOLUTION, "guidescope", test=True)
     maincam = Camera(MAINCAM_RESOLUTION, "maincam")
@@ -508,11 +516,20 @@ def main():
     tracker = Tracker()
 
     # GUI setup
-    gui = Gui(tracker, ser, guidescope, maincam)
+    gui = Gui(tracker, guidescope, maincam)
+
+    # open serial connection
+    ser = open_serial(gui)
+
+    # track number of commands sent
+    i = 0
 
     # main tracking loop
     # run until user closes GUI
     while gui.open:
+        # gui loop
+        gui.root.update()
+
         # start timer for fps
         loop_time = time.perf_counter()
 
@@ -521,37 +538,55 @@ def main():
         guidescope.frame = cv2.rotate(guidescope.frame, cv2.ROTATE_180)
         maincam.update_frame()
 
-        # skip tracking loop if there is no new guidescope frame;
-        if guidescope.ret:
-            # get a list of bounding rectangles for each object in frame
-            object_bounding_rectangles = get_bounding_rectangles(guidescope.frame, gui.min_area_input.get(), gui.min_threshold_input.get())
+        # exit loop if frames arent recieved
+        if not (guidescope.ret and maincam.ret):
+            break
 
-            # get a list of objects with ids
-            tracker.update(object_bounding_rectangles)
+        # get a list of bounding rectangles for each object in frame
+        object_bounding_rectangles = get_bounding_rectangles(guidescope.frame, gui.min_area_input.get(), gui.min_threshold_input.get())
 
-            # update tracking id
-            gui.update_tracking_id()
+        # get a list of objects with ids
+        tracker.update(object_bounding_rectangles)
 
-            # move the motors if we are tracking an object
-            # will only execute every .5 seconds max
-            # sending commands too quickly seems to overwhelm the serial connection
-            if tracker.target_tracking and time.perf_counter() - tracker.command_timer > 0.5:
-                # calculate steps to take
-                x, y = tracker.target_pos
-                x_mov = guidescope.dimensions[0]/2 - x
-                y_mov = guidescope.dimensions[1]/2 - y
-                x_mov *= (x_mov / guidescope.dimensions[0]) * (GUIDESCOPE_FOV_ARCSEC[0] / STEP_SIZE_ARCSEC)
-                y_mov *= (y_mov / guidescope.dimensions[1]) * (GUIDESCOPE_FOV_ARCSEC[1] / STEP_SIZE_ARCSEC)
+        # update tracking id
+        gui.update_tracking_id()
 
-                # take steps
-                move_motor("az", x_mov, ser)
-                move_motor("elv", y_mov, ser)
+        # move the motors if we are tracking an object
+        # will only execute every .5 seconds max
+        # sending commands too quickly seems to overwhelm the serial connection
+        if tracker.target_tracking and time.perf_counter() - tracker.command_timer > 0.1:
 
-                # update timer
-                tracker.command_timer = time.perf_counter()
+            # hacky fix
+            # serial comms seem to stop working at about ~256 commands
+            # so restart connection before then
+            # counter i tracks commands sent
+            if int(i/2) % 120 == 0:
+                print("reset serial connection")
+                ser.close()
+                ser = open_serial(gui)
+
+            # calculate steps to take
+            # caclulates distance to centre in pixels, then converts to steps
+            x, y = tracker.target_pos
+            x_mov = guidescope.dimensions[0]/2 - x
+            y_mov = guidescope.dimensions[1]/2 - y
+            x_mov *= GUIDESCOPE_FOV_ARCSEC[0] / STEP_SIZE_ARCSEC / guidescope.dimensions[0]
+            y_mov *= GUIDESCOPE_FOV_ARCSEC[1] / STEP_SIZE_ARCSEC / guidescope.dimensions[1]
+
+            # take steps
+            # move_motor returns the number of commands sent since the start
+            i = move_motor("az", x_mov, ser)
+            i = move_motor("elv", y_mov, ser)
+
+            # update timer
+            tracker.command_timer = time.perf_counter()
+
+            #print(f"{x_mov}, {y_mov}")
 
         # send video to gui
         gui.update_video(guidescope.frame, maincam.frame, loop_time)
+
+        # gui loop
         gui.root.update()
 
         # record frames to video
@@ -567,4 +602,11 @@ def main():
     if maincam.recording:
         maincam.vwriter.release()
 
+    # make sure GUI closes in the event of a camera disconnect
+    if gui.open:
+        gui.on_close()
+
     print("Done.")
+
+if __name__ == "__main__":
+    main()
