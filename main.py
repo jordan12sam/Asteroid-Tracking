@@ -13,6 +13,14 @@ import cv2
 from scipy.optimize import linear_sum_assignment
 
 # global constants
+
+# setup options
+TEST_VIDEO = True
+TIMERS = True
+ARDUINO_COM = 3
+GUIDESCOPE_ID = 1
+MAINCAM_ID = 0
+
 # motor specs
 STEP_SIZE_ARCSEC = 6480
 GEAR_RATIO = 50
@@ -21,12 +29,19 @@ STEP_SIZE_ARCSEC /= GEAR_RATIO
 # camera specs
 GUIDESCOPE_FOV_ARCSEC = (6876, 3852)
 GUIDESCOPE_RESOLUTION = (1920, 1080)
+GUIDESCOPE_FPS = 20
 
 MAINCAM_FOV_ARCSEC = (1100.16, 790.56)
 MAINCAM_RESOLUTION = (3856, 2764)
+MAINCAM_FPS = 7
 
 # serial communications
 BAUD_RATE = 9600
+
+# tracking constants
+# factor by which to downscale the guidescope frame for image processing
+# must be a common factor of both guidescope dimensions
+SIZE_RATIO = 4
 
 # tracker object
 # tracks objects across frames
@@ -53,10 +68,10 @@ class Tracker:
     def update(self, detection):
         if self.active:
             #number of frames missing objects are remembered for
-            MEMORY = 100
+            MEMORY = 10
             #an artificial cost to add to the list 
             #matches with missing objects
-            THRESHOLD = 20
+            THRESHOLD = 200
 
             #clear current list
             self.objects = {}
@@ -303,23 +318,24 @@ class Gui():
                                     (5, y-10), 
                                     cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 2)
 
-        for id, obj in self.tracker.objects.items():
-            x, y, width, height, dx, dy, mem = obj
+        if self.tracker.active:
+            for id, obj in self.tracker.objects.items():
+                x, y, width, height, dx, dy, mem = obj
 
-            # if this is the object we are tracking
-            # then change the colour from blue to red
-            # else leave it as blue
-            if id == self.tracker.target_id and self.tracker.target_tracking:
-                self.tracker.target_pos = (x, y)
-                text_colour = (0, 0, 255)
-                box_colour = (0, 0, 255)
-            else:
-                text_colour = (255, 0, 0)
-                box_colour = (0, 255, 0)
+                # if this is the object we are tracking
+                # then change the colour from blue to red
+                # else leave it as blue
+                if id == self.tracker.target_id and self.tracker.target_tracking:
+                    self.tracker.target_pos = (x, y)
+                    text_colour = (0, 0, 255)
+                    box_colour = (0, 0, 255)
+                else:
+                    text_colour = (255, 0, 0)
+                    box_colour = (0, 255, 0)
 
-            if not width*height == 0:
-                cv2.putText(self.show_frame, str(id), (x, y - 5), cv2.FONT_HERSHEY_PLAIN, 1, text_colour, 2)
-                cv2.rectangle(self.show_frame, (x, y), (x + width, y + height), box_colour, 1)
+                if not width*height == 0:
+                    cv2.putText(self.show_frame, str(id), (x, y - 5), cv2.FONT_HERSHEY_PLAIN, 1, text_colour, 2)
+                    cv2.rectangle(self.show_frame, (x, y), (x + width, y + height), box_colour, 1)
 
         # update fps counter
         loop_time = time.perf_counter() - loop_time
@@ -342,7 +358,7 @@ class Gui():
         # OpenCV represents images in BGR order; however PIL
         # represents images in RGB order, so we need to swap
         # the channels, then convert to PIL and ImageTk format
-        image = cv2.resize(self.show_frame, (1024, 576))
+        image = cv2.resize(self.show_frame, (768, 432))
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         image = Image.fromarray(image)
         image = ImageTk.PhotoImage(image)
@@ -373,9 +389,9 @@ class Gui():
 
 # camera object
 class Camera():
-    def __init__(self, dimensions, name, test=False):
+    def __init__(self, dimensions, name, id, test=False):
         self.name = name
-        self.id = 0
+        self.id = id
         self.dimensions = dimensions
 
         self.codec = cv2.VideoWriter_fourcc(*'WMV3')
@@ -430,9 +446,9 @@ def move_motor(motor, steps, ser, _count=count(1)):
     cmd = "<"
 
     if motor == "az":
-        cmd += "b"
-    elif motor == "elv":
         cmd += "a"
+    elif motor == "elv":
+        cmd += "b"
     else:
         print("motor error")
     
@@ -468,9 +484,12 @@ def get_bounding_rectangles(frame, min_area, threshold_val):
     except ValueError:
         threshold_val = 20
 
+    # reduce the resolution of the frame before doing image processing
+    frame = cv2.resize(frame, (np.array(GUIDESCOPE_RESOLUTION)/SIZE_RATIO).astype(np.int))
+
     #greyscale and blur both the current and previous frame
     frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    frame = cv2.GaussianBlur(frame, (11,11), 0)
+    #frame = cv2.GaussianBlur(frame, (11,11), 0)
 
     #take threshold of frame
     #dilate and erode to join fragmented objects
@@ -486,13 +505,13 @@ def get_bounding_rectangles(frame, min_area, threshold_val):
     #loop through list of valid objects and store their positions
     for edge in edges:
         if min_area < cv2.contourArea(edge):
-            object_bounding_rectangles.append(cv2.boundingRect(edge))
+            object_bounding_rectangles.append(np.array(cv2.boundingRect(edge))*SIZE_RATIO)
 
     return object_bounding_rectangles
 
 # open serial comms
 def open_serial(gui):
-    ser = serial.Serial("COM3", BAUD_RATE)
+    ser = serial.Serial(f"COM{ARDUINO_COM}", BAUD_RATE)
     ser.timeout = 1
     if not ser.isOpen():
         ser.open()
@@ -505,8 +524,9 @@ def main():
     # main setup
     print("Starting main...")
 
-    guidescope = Camera(GUIDESCOPE_RESOLUTION, "guidescope", test=True)
-    maincam = Camera(MAINCAM_RESOLUTION, "maincam")
+    guidescope = Camera(GUIDESCOPE_RESOLUTION, "guidescope", GUIDESCOPE_ID, test=TEST_VIDEO)
+    maincam = Camera(MAINCAM_RESOLUTION, "maincam", MAINCAM_ID)
+    maincam_timer = time.perf_counter()
 
     #CALIBRATE
 
@@ -527,71 +547,91 @@ def main():
     # main tracking loop
     # run until user closes GUI
     while gui.open:
-        # gui loop
-        gui.root.update()
-
         # start timer for fps
         loop_time = time.perf_counter()
 
+        # gui loop
+        gui_update_time = time.perf_counter()
+        gui.root.update()
+        if TIMERS: print(f"GUI Time: {time.perf_counter()-gui_update_time}")
+
         # get new frames
+        frame_time = time.perf_counter()
         guidescope.update_frame()
-        guidescope.frame = cv2.rotate(guidescope.frame, cv2.ROTATE_180)
-        maincam.update_frame()
+        #guidescope.frame = cv2.rotate(guidescope.frame, cv2.ROTATE_180)
+
+        # use a timer to stop loop from hanging if there is no new maincam frame
+        if time.perf_counter() - maincam_timer > 1/MAINCAM_FPS:
+            maincam.update_frame()
+            maincam.frame = cv2.rotate(maincam.frame, cv2.ROTATE_180)
+            maincam_timer = time.perf_counter()
+        if TIMERS: print(f"New Frames: {time.perf_counter() - frame_time}")
 
         # exit loop if frames arent recieved
         if not (guidescope.ret and maincam.ret):
             break
 
-        # get a list of bounding rectangles for each object in frame
-        object_bounding_rectangles = get_bounding_rectangles(guidescope.frame, gui.min_area_input.get(), gui.min_threshold_input.get())
+        if tracker.active:
+            # get a list of bounding rectangles for each object in frame
+            cv_time = time.perf_counter()
+            object_bounding_rectangles = get_bounding_rectangles(guidescope.frame, gui.min_area_input.get(), gui.min_threshold_input.get())
+            if TIMERS: print(f"Image Processing: {time.perf_counter()-cv_time}")
 
-        # get a list of objects with ids
-        tracker.update(object_bounding_rectangles)
+            tracking_time = time.perf_counter()
+            # get a list of objects with ids
+            tracker.update(object_bounding_rectangles)
 
-        # update tracking id
-        gui.update_tracking_id()
+            # update tracking id
+            gui.update_tracking_id()
 
-        # move the motors if we are tracking an object
-        # will only execute every .5 seconds max
-        # sending commands too quickly seems to overwhelm the serial connection
-        if tracker.target_tracking and time.perf_counter() - tracker.command_timer > 0.1:
+            # move the motors if we are tracking an object
+            # will only execute every .5 seconds max
+            # sending commands too quickly seems to overwhelm the serial connection
+            if tracker.target_tracking and time.perf_counter() - tracker.command_timer > 1:
 
-            # hacky fix
-            # serial comms seem to stop working at about ~256 commands
-            # so restart connection before then
-            # counter i tracks commands sent
-            if int(i/2) % 120 == 0:
-                print("reset serial connection")
-                ser.close()
-                ser = open_serial(gui)
+                # hacky fix
+                # serial comms seem to stop working at about ~256 commands
+                # so restart connection before then
+                # counter i tracks commands sent
+                if int(i/2) % 120 == 0:
+                    print("reset serial connection")
+                    ser.close()
+                    ser = open_serial(gui)
 
-            # calculate steps to take
-            # caclulates distance to centre in pixels, then converts to steps
-            x, y = tracker.target_pos
-            x_mov = guidescope.dimensions[0]/2 - x
-            y_mov = guidescope.dimensions[1]/2 - y
-            x_mov *= GUIDESCOPE_FOV_ARCSEC[0] / STEP_SIZE_ARCSEC / guidescope.dimensions[0]
-            y_mov *= GUIDESCOPE_FOV_ARCSEC[1] / STEP_SIZE_ARCSEC / guidescope.dimensions[1]
+                # calculate steps to take
+                # caclulates distance to centre in pixels, then converts to steps
+                x, y = tracker.target_pos
+                x_mov = guidescope.dimensions[0]/2 - x
+                y_mov = guidescope.dimensions[1]/2 - y
+                x_mov *= GUIDESCOPE_FOV_ARCSEC[0] / STEP_SIZE_ARCSEC / guidescope.dimensions[0]
+                y_mov *= GUIDESCOPE_FOV_ARCSEC[1] / STEP_SIZE_ARCSEC / guidescope.dimensions[1]
 
-            # take steps
-            # move_motor returns the number of commands sent since the start
-            i = move_motor("az", x_mov, ser)
-            i = move_motor("elv", y_mov, ser)
+                # take steps
+                # move_motor returns the number of commands sent since the start
+                i = move_motor("az", x_mov, ser)
+                i = move_motor("elv", y_mov, ser)
 
-            # update timer
-            tracker.command_timer = time.perf_counter()
+                # update timer
+                tracker.command_timer = time.perf_counter()
 
-            #print(f"{x_mov}, {y_mov}")
+                #print(f"{x_mov}, {y_mov}")
+            if TIMERS: print(f"Tracking: {time.perf_counter() - tracking_time}")
 
         # send video to gui
+        gui_update_time = time.perf_counter()
         gui.update_video(guidescope.frame, maincam.frame, loop_time)
+        if TIMERS: print(f"Video Update: {time.perf_counter()-gui_update_time}")
 
         # gui loop
+        gui_update_time = time.perf_counter()
         gui.root.update()
+        if TIMERS: print(f"GUI Time: {time.perf_counter()-gui_update_time}")
 
         # record frames to video
         guidescope.write_frame()
         maincam.write_frame()
+
+        if TIMERS: print(f"Total loop: {time.perf_counter() - loop_time}\n")
 
     # close serial connection
     ser.close()
