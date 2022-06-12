@@ -1,5 +1,5 @@
 //define combined motor frequency
-#define TOTAL_FREQUENCY 100
+#define TOTAL_FREQUENCY 50
 
 //class for motors
 //contains pins, step counter, frequency, and milliseconds since last step (wait)

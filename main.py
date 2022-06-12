@@ -12,36 +12,34 @@ os.environ["OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS"] = "0"
 import cv2
 from scipy.optimize import linear_sum_assignment
 
-# global constants
-
 # setup options
-TEST_VIDEO = True
-TIMERS = True
-ARDUINO_COM = 3
-GUIDESCOPE_ID = 1
+TEST_VIDEO = True   # use guidescope test video true/false
+TIMERS = False      # print timers to console to track performance
+
+ARDUINO_COM = 5     # usb port for arduino, use arduino ide to check which port to use
+GUIDESCOPE_ID = 2   # IDs for cameras, change them around to find right setup
 MAINCAM_ID = 0
 
+BAUD_RATE = 9600
+
+# tracking constants
+SIZE_RATIO = 1              # factor to downscale guidescope resolution for image processing (1/2/4/6/8)
+MIN_AREA = 10                # minimum size of objects to track (pixels)
+TRACKING_THRESHOLD = 50    # minimum brightness value to track 0-255
+
 # motor specs
-STEP_SIZE_ARCSEC = 6480
-GEAR_RATIO = 50
+STEP_SIZE_ARCSEC = 6480             # size of a motor step in arcsecs
+GEAR_RATIO = 50                     # gear ratio of gear mechanism
 STEP_SIZE_ARCSEC /= GEAR_RATIO
 
 # camera specs
-GUIDESCOPE_FOV_ARCSEC = (6876, 3852)
+GUIDESCOPE_FOV_ARCSEC = (6876, 3852)    #x, y
 GUIDESCOPE_RESOLUTION = (1920, 1080)
-GUIDESCOPE_FPS = 20
+GUIDESCOPE_FPS = 30
 
 MAINCAM_FOV_ARCSEC = (1100.16, 790.56)
 MAINCAM_RESOLUTION = (3856, 2764)
 MAINCAM_FPS = 7
-
-# serial communications
-BAUD_RATE = 9600
-
-# tracking constants
-# factor by which to downscale the guidescope frame for image processing
-# must be a common factor of both guidescope dimensions
-SIZE_RATIO = 4
 
 # tracker object
 # tracks objects across frames
@@ -55,7 +53,7 @@ class Tracker:
 
         # info for the target object
         self.target_tracking = False
-        self.target_id = 57
+        self.target_id = 0
         self.target_pos = (0, 0)
         self.command_timer = time.perf_counter()
 
@@ -68,7 +66,7 @@ class Tracker:
     def update(self, detection):
         if self.active:
             #number of frames missing objects are remembered for
-            MEMORY = 10
+            MEMORY = 120
             #an artificial cost to add to the list 
             #matches with missing objects
             THRESHOLD = 200
@@ -80,8 +78,8 @@ class Tracker:
             #uses euclidean distance
             #has dummy nodes to match to incase of new objects
             cost =  [[((t_x - d_x)**2 + (t_y - d_y)**2)**0.5 
-                        for t_x, t_y, _, _, _, _, _ in self.previous_objects.values()] 
-                        for d_x, d_y, _, _ in detection]
+                        for t_x, t_y, t_w, t_h, _, _, _ in self.previous_objects.values()] 
+                        for d_x, d_y, d_w, d_h in detection]
             cost = [(*costs, *([THRESHOLD]*len(detection))) for costs in cost]
 
             #special case of empty list (for when there are no current detections)
@@ -137,7 +135,7 @@ class Tracker:
         self.active = not self.active
         if not self.active:
             print("Object Tracking Off")
-            self.clear
+            self.clear()
         else:
             print("Object Tracking On")
 
@@ -255,14 +253,14 @@ class Gui():
         self.min_threshold_label.grid(row=tracking_options_row+3, column=self.video_width+1, padx=self.padx, pady=self.pady)
 
         self.min_threshold_input = tk.Entry(self.root, justify="right", width=18)
-        self.min_threshold_input.insert(tk.END, "20")
+        self.min_threshold_input.insert(tk.END, str(TRACKING_THRESHOLD))
         self.min_threshold_input.grid(row=tracking_options_row+3, column=self.video_width+2, padx=self.padx, pady=self.pady)
 
         self.min_area_label = tk.Label(self.root, text="Minimum Detection Area")
         self.min_area_label.grid(row=tracking_options_row+4, column=self.video_width+1, padx=self.padx, pady=self.pady)
 
         self.min_area_input = tk.Entry(self.root, justify="right", width=18)
-        self.min_area_input.insert(tk.END, "20")
+        self.min_area_input.insert(tk.END, str(MIN_AREA))
         self.min_area_input.grid(row=tracking_options_row+4, column=self.video_width+2, padx=self.padx, pady=self.pady)
 
         # manual control
@@ -334,8 +332,8 @@ class Gui():
                     box_colour = (0, 255, 0)
 
                 if not width*height == 0:
-                    cv2.putText(self.show_frame, str(id), (x, y - 5), cv2.FONT_HERSHEY_PLAIN, 1, text_colour, 2)
-                    cv2.rectangle(self.show_frame, (x, y), (x + width, y + height), box_colour, 1)
+                    cv2.putText(self.show_frame, str(id), (int(x - width/2), int(y - height/2 - 5)), cv2.FONT_HERSHEY_PLAIN, 1, text_colour, 2)
+                    cv2.rectangle(self.show_frame, (int(x - width/2), int(y - height/2)), (int(x + width/2), int(y + height/2)), box_colour, 1)
 
         # update fps counter
         loop_time = time.perf_counter() - loop_time
@@ -477,12 +475,12 @@ def get_bounding_rectangles(frame, min_area, threshold_val):
     try:
         min_area = int(min_area)
     except ValueError:
-        min_area = 20
+        min_area = MIN_AREA
 
     try:
         threshold_val = int(threshold_val)
     except ValueError:
-        threshold_val = 20
+        threshold_val = TRACKING_THRESHOLD
 
     # reduce the resolution of the frame before doing image processing
     frame = cv2.resize(frame, (np.array(GUIDESCOPE_RESOLUTION)/SIZE_RATIO).astype(np.int))
@@ -495,8 +493,8 @@ def get_bounding_rectangles(frame, min_area, threshold_val):
     #dilate and erode to join fragmented objects
     #get a list of edges and their positions
     _, threshold = cv2.threshold(frame, threshold_val, 255, cv2.THRESH_BINARY)
-    dilated = cv2.dilate(threshold, None, iterations = 1)
-    eroded = cv2.erode(dilated, None, iterations = 1)
+    dilated = cv2.dilate(threshold, None, iterations = 2)
+    eroded = cv2.erode(dilated, None, iterations = 2)
     edges, _ = cv2.findContours(eroded, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 
     #initialise an empty list to hold object bounding rectangles, (x, y, width, height)
@@ -504,8 +502,13 @@ def get_bounding_rectangles(frame, min_area, threshold_val):
 
     #loop through list of valid objects and store their positions
     for edge in edges:
-        if min_area < cv2.contourArea(edge):
+        if min_area/SIZE_RATIO < cv2.contourArea(edge):
             object_bounding_rectangles.append(np.array(cv2.boundingRect(edge))*SIZE_RATIO)
+
+    # place x/y at the centre of the object
+    for i in range(0, len(object_bounding_rectangles)):
+        object_bounding_rectangles[i][0] += int(object_bounding_rectangles[i][2]/2)
+        object_bounding_rectangles[i][1] += int(object_bounding_rectangles[i][3]/2)
 
     return object_bounding_rectangles
 
@@ -563,7 +566,7 @@ def main():
         # use a timer to stop loop from hanging if there is no new maincam frame
         if time.perf_counter() - maincam_timer > 1/MAINCAM_FPS:
             maincam.update_frame()
-            maincam.frame = cv2.rotate(maincam.frame, cv2.ROTATE_180)
+            #maincam.frame = cv2.rotate(maincam.frame, cv2.ROTATE_180)
             maincam_timer = time.perf_counter()
         if TIMERS: print(f"New Frames: {time.perf_counter() - frame_time}")
 
